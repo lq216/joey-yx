@@ -841,9 +841,9 @@ function generateIPsFromCIDRs(cidrList, minCount) {
 }
 
 // 生成候选 IP 列表（从每个 CIDR 段选一个）
-function generateCandidateIPs(count = 10) {
-    // 生成更多候选 IP 以确保有足够的成功结果
-    const candidateCount = Math.max(count * 2, cloudflareCIDRs.length);
+function generateCandidateIPs(testCount = 5000) {
+    // 生成指定数量的候选 IP
+    const candidateCount = Math.min(testCount, cloudflareCIDRs.length * 100); // 限制最大数量
     return generateIPsFromCIDRs(cloudflareCIDRs, candidateCount);
 }
 
@@ -1385,10 +1385,15 @@ function generateHomePage(scuValue) {
             <div class="form-group" style="margin-top: 24px;">
                 <label>自动优选（Cloudflare官方IP段）</label>
                 <div style="display: flex; gap: 10px; margin-bottom: 12px;">
-                    <input type="number" id="optimizeCount" placeholder="优选数量" value="10" min="1" max="50" style="flex: 1; min-width: 0;">
+                    <input type="number" id="optimizeCount" placeholder="优选数量" value="10" min="1" max="100" style="flex: 1; min-width: 0;">
                     <input type="number" id="optimizePort" placeholder="端口" value="443" style="flex: 1; min-width: 0;">
                     <input type="number" id="optimizeTimeout" placeholder="超时(ms)" value="5000" style="flex: 1; min-width: 0;">
                 </div>
+                <div style="display: flex; gap: 10px; margin-bottom: 12px;">
+                    <input type="number" id="optimizeTestCount" placeholder="测试数量" value="5000" min="100" max="10000" style="flex: 1; min-width: 0;">
+                    <input type="number" id="optimizeConcurrency" placeholder="并发数" value="200" min="1" max="500" style="flex: 1; min-width: 0;">
+                </div>
+                <small style="display: block; margin-top: -12px; margin-bottom: 12px; color: #86868b; font-size: 13px; padding-left: 0;">测试数量：从CIDR段生成的候选IP数量 | 并发数：同时测试的IP数量</small>
                 <button type="button" class="btn" onclick="autoOptimize()" id="optimizeBtn" style="margin-top: 0; background: #34c759;">开始自动优选</button>
                 <div id="optimizeResult" style="display: none; margin-top: 12px; max-height: 400px; overflow-y: auto;"></div>
             </div>
@@ -1856,11 +1861,23 @@ function generateHomePage(scuValue) {
             const count = parseInt(document.getElementById('optimizeCount').value) || 10;
             const port = parseInt(document.getElementById('optimizePort').value) || 443;
             const timeout = parseInt(document.getElementById('optimizeTimeout').value) || 5000;
+            const testCount = parseInt(document.getElementById('optimizeTestCount').value) || 5000;
+            const concurrency = parseInt(document.getElementById('optimizeConcurrency').value) || 200;
             const optimizeBtn = document.getElementById('optimizeBtn');
             const optimizeResult = document.getElementById('optimizeResult');
             
-            if (count < 1 || count > 50) {
-                alert('优选数量必须在 1-50 之间');
+            if (count < 1 || count > 100) {
+                alert('优选数量必须在 1-100 之间');
+                return;
+            }
+            
+            if (testCount < 100 || testCount > 10000) {
+                alert('测试数量必须在 100-10000 之间');
+                return;
+            }
+            
+            if (concurrency < 1 || concurrency > 500) {
+                alert('并发数必须在 1-500 之间');
                 return;
             }
             
@@ -1873,7 +1890,7 @@ function generateHomePage(scuValue) {
                 // 步骤1: 从后端获取候选 IP 列表
                 const currentUrl = new URL(window.location.href);
                 const baseUrl = currentUrl.origin;
-                const optimizeUrl = \`\${baseUrl}/auto-optimize?count=\${count}\`;
+                const optimizeUrl = \`\${baseUrl}/auto-optimize?testCount=\${testCount}\`;
                 
                 const response = await fetch(optimizeUrl);
                 const data = await response.json();
@@ -1888,7 +1905,7 @@ function generateHomePage(scuValue) {
                 }
                 
                 const candidateIPs = data.ips;
-                optimizeResult.innerHTML = \`<div style="padding: 12px; text-align: center; color: #86868b;">已生成 \${candidateIPs.length} 个候选 IP，正在测试延迟（使用您的网络）...</div>\`;
+                optimizeResult.innerHTML = \`<div style="padding: 12px; text-align: center; color: #86868b;">已生成 \${candidateIPs.length} 个候选 IP，正在测试延迟（并发: \${concurrency}）...</div>\`;
                 
                 // 步骤2: 使用批量测试API测试所有 IP 的延迟
                 // 注意：这里使用后端API，但用户说手动批量测试全部可用，说明后端测试逻辑是正确的
@@ -1902,7 +1919,7 @@ function generateHomePage(scuValue) {
                         hosts: candidateIPs,
                         port: port,
                         timeout: timeout,
-                        concurrency: 5
+                        concurrency: concurrency
                     })
                 });
                 
@@ -2113,7 +2130,7 @@ export default {
             }
         }
         
-        // 自动优选 API: /auto-optimize?count=10 (只生成 IP 列表，不测试)
+        // 自动优选 API: /auto-optimize?testCount=5000 (只生成 IP 列表，不测试)
         if (path === '/auto-optimize') {
             if (request.method === 'OPTIONS') {
                 return new Response(null, {
@@ -2126,12 +2143,12 @@ export default {
             }
             
             try {
-                const count = parseInt(url.searchParams.get('count') || '10');
+                const testCount = parseInt(url.searchParams.get('testCount') || '5000');
                 
-                if (count < 1 || count > 50) {
+                if (testCount < 100 || testCount > 10000) {
                     return new Response(JSON.stringify({ 
                         success: false, 
-                        error: 'count 必须在 1-50 之间' 
+                        error: 'testCount 必须在 100-10000 之间' 
                     }), {
                         status: 400,
                         headers: { 
@@ -2142,7 +2159,7 @@ export default {
                 }
                 
                 // 只生成 IP 列表，不测试（测试在前端进行，使用用户网络）
-                const candidateIPs = generateCandidateIPs(count * 2);
+                const candidateIPs = generateCandidateIPs(testCount);
                 
                 return new Response(JSON.stringify({ 
                     success: true, 
